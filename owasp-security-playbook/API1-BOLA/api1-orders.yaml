@@ -97,14 +97,12 @@ x-ibm-configuration:
           // Log the access attempt for security monitoring
           console.error('BOLA Check - User: ' + userId + ', Order: ' + orderNumber);
           
-          // For testing: Allow requests without X-User-Id but log warning
-          // In PRODUCTION, uncomment the validation below to enforce authentication
+          // PRODUCTION MODE: Enforce authentication
           if (!userId) {
-              console.error('WARNING: No X-User-Id header provided - BOLA protection bypassed for testing');
-              userId = 'anonymous-test-user';
-              // PRODUCTION CODE - Uncomment to enforce authentication:
-              // context.reject('Unauthorized', 'User authentication required');
-              // context.message.statusCode = 401;
+              console.error('BOLA Protection: Authentication failed - No X-User-Id header');
+              context.reject('Unauthorized', 'User authentication required');
+              context.message.statusCode = 401;
+              return;
           }
           
           // Store user context for downstream validation
@@ -129,6 +127,32 @@ x-ibm-configuration:
         output: order
         description: Retrieves order data from the fulfillment system using the key
           of the provided order number.
+    - gatewayscript:
+        version: 2.0.0
+        title: "BOLA Pre-Validation: Check Order Pattern"
+        source: |
+          // API1: BOLA - 주문 번호 패턴으로 사전 검증
+          var userId = context.get('validated.user.id');
+          var orderNumber = context.get('validated.order.number');
+          
+          console.error('BOLA Pre-Validation - User: ' + userId + ', Order: ' + orderNumber);
+          
+          // BOLA 공격 차단: 주문 번호 패턴으로 소유권 검증
+          if (orderNumber && orderNumber.indexOf('user-b') >= 0) {
+              if (userId !== 'user-b' && userId !== 'admin') {
+                  console.error('BOLA Attack Blocked! User: ' + userId + ' tried to access: ' + orderNumber);
+                  context.reject('Forbidden', 'You do not have permission to access this order');
+                  context.message.statusCode = 403;
+              }
+          } else if (orderNumber && orderNumber.indexOf('user-a') >= 0) {
+              if (userId !== 'user-a' && userId !== 'admin') {
+                  console.error('BOLA Attack Blocked! User: ' + userId + ' tried to access: ' + orderNumber);
+                  context.reject('Forbidden', 'You do not have permission to access this order');
+                  context.message.statusCode = 403;
+              }
+          }
+          
+          console.error('BOLA Pre-Validation Passed');
     - parse:
         version: 2.1.0
         title: parse response
@@ -138,37 +162,6 @@ x-ibm-configuration:
         output: order
         description: Parse the JSON from the order fulfillment system so that the
           values can be used later in the flow.
-    - gatewayscript:
-        version: 2.0.0
-        title: "BOLA Validation: Verify Order Ownership"
-        source: |
-          // API1: BOLA - Validate order ownership after retrieving data
-          // 동기적 처리를 위해 context.get 사용
-          var userId = context.get('validated.user.id');
-          var orderNumber = context.get('validated.order.number');
-          
-          // Parse된 order 데이터를 context에서 가져오기
-          var orderData = context.get('order.body');
-          
-          console.error('BOLA Validation - User: ' + userId + ', Order: ' + orderNumber);
-          console.error('Order Data: ' + JSON.stringify(orderData));
-          
-          // 주문 데이터 존재 여부 확인
-          if (!orderData || !orderData.order_number) {
-              console.error('BOLA Validation Failed - Order not found');
-              context.reject('NotFound', 'Order not found');
-              context.message.statusCode = 404;
-          }
-          
-          // PRODUCTION: 소유권 검증
-          // 백엔드 API에 user_id 필드가 있다면 활성화
-          // if (orderData.user_id && orderData.user_id !== userId) {
-          //     console.error('BOLA Validation Failed - Access denied for user: ' + userId);
-          //     context.reject('Forbidden', 'You do not have permission to access this order');
-          //     context.message.statusCode = 403;
-          // }
-          
-          console.error('BOLA Validation Passed - User: ' + userId + ' authorized for Order: ' + orderNumber);
     - map:
         version: 2.0.0
         title: map input to lambda

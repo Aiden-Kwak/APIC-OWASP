@@ -1,0 +1,37 @@
+==================================================
+API1-BOLA Security Test
+Timestamp: Tue Feb 24 14:44:37 KST 2026
+==================================================
+
+========================================
+Test: No X-User-Id Header
+Expected: 401 Unauthorized
+Actual: HTTP 200 - 
+[0;31m✗ FAIL[0m
+
+========================================
+Test: Valid User, Non-existent Order
+Expected: 404 Not Found
+Actual: HTTP 200 - 
+[0;31m✗ FAIL[0m
+
+========================================
+Test: Valid User, Valid Order
+Expected: 200 OK or 404 Not Found
+Actual: HTTP 200
+[0;32m✓ PASS[0m
+
+Response Body:
+========================================
+Test: BOLA Attack Simulation
+Expected: 403 Forbidden or 404 Not Found
+Actual: HTTP 200 - 
+[0;31m✗ FAIL[0m
+
+==================================================
+Test Summary
+==================================================
+Total Tests: 4
+[0;32mPassed: 1[0m
+[0;31mFailed: 3[0m
+==================================================
