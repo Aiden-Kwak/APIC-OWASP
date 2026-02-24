@@ -1,0 +1,523 @@
+openapi: 3.0.1
+info:
+  title: Order-Aiden-Input-Validation-Test
+  description: API10 Unsafe Consumption of APIs 테스트 - 외부 API 응답 검증 및 안전한 처리
+  termsOfService: https://github.com/ibm-apiconnect/sample-orders-api
+  contact:
+    name: IBM Corporation
+    url: https://www.ibm.com/products/api-connect
+  version: 2.0.0-input-validation
+  x-ibm-name: ibm-sample-order-api-input-validation
+externalDocs:
+  description: Github project for this API, containing source code and deployment pipeline
+  url: https://github.com/ibm-apiconnect/sample-orders-api
+servers:
+  - url: /order
+    x-internal: false
+security:
+  - clientID: []
+paths:
+  /{orderNumber}:
+    get:
+      summary: Retrieve the details of your order with external API response validation
+      parameters:
+        - name: orderNumber
+          in: path
+          description: >-
+            Order number to lookup - you should find this in your confirmation
+            e-mail
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order found successfully
+          content:
+            application/json:
+              schema:
+                title: Order Details
+                type: object
+                properties:
+                  order_number:
+                    title: Order Number
+                    type: string
+                    example: ORD00989792
+                  tracking_status:
+                    title: Tracking Status
+                    type: object
+                    properties: {}
+                  shipped_at:
+                    title: Date Shipped
+                    type: string
+                    format: date-time
+                  created_at:
+                    title: Date Order Created
+                    type: string
+                    format: date-time
+                  status:
+                    title: Order Status
+                    type: string
+                    enum:
+                      - SHIPPED
+                      - PICKED
+                      - PENDING
+                      - DELIVERED
+                  tracking_reference:
+                    title: Tracking Reference
+                    type: string
+        '502':
+          description: Bad Gateway - External API returned invalid data
+components:
+  securitySchemes:
+    clientID:
+      type: apiKey
+      name: X-IBM-Client-Id
+      in: header
+x-ibm-configuration:
+  properties:
+    target-url:
+      value: >-
+        https://sample-api.us-east-a.apiconnect.automation.ibm.com/orders/order/{orderNumber}
+      description: URL of the proxy policy
+      encoded: false
+  cors:
+    enabled: true
+  gateway: datapower-api-gateway
+  type: rest
+  phase: realized
+  enforced: true
+  testable: true
+  assembly:
+    execute:
+      - invoke:
+          title: order lookup
+          version: 2.0.0
+          verb: keep
+          target-url: $(target-url)
+          follow-redirects: false
+          timeout: 60
+          parameter-control:
+            type: blocklist
+            values: []
+          header-control:
+            type: blocklist
+            values: []
+          inject-proxy-headers: true
+          persistent-connection: true
+          backend-type: json
+          output: order
+          description: >-
+            Retrieves order data from the fulfillment system using the key of
+            the provided order number.
+      - parse:
+          version: 2.1.0
+          title: parse response
+          parse-settings-reference:
+            default: apic-default-parsesettings
+          input: order
+          output: order
+          description: >-
+            Parse the JSON from the order fulfillment system so that the values
+            can be used later in the flow.
+      # API10: 외부 API 응답 검증
+      - gatewayscript:
+          version: 2.0.0
+          title: INPUT-VALIDATION - Validate External API Response
+          source: |
+            // API10: Unsafe Consumption of APIs 방어
+            // 외부 API 응답을 신뢰하지 않고 철저히 검증
+            
+            var orderData = context.get('order.body');
+            var statusCode = context.get('order.status.code');
+            
+            console.error('[INPUT-VALIDATION] Validating external API response');
+            console.error('[INPUT-VALIDATION] Status Code: ' + statusCode);
+            
+            // 1. HTTP 상태 코드 검증
+            if (statusCode !== 200) {
+              console.error('[INPUT-VALIDATION-FAIL] Invalid status code: ' + statusCode);
+              context.set('message.status.code', 502);
+              context.set('message.body', {
+                error: 'Bad Gateway',
+                message: 'External API returned error'
+              });
+              context.message.header.set('Content-Type', 'application/json');
+              throw new Error('Invalid external API response');
+            }
+            
+            // 2. 응답 데이터 존재 여부 확인
+            if (!orderData) {
+              console.error('[INPUT-VALIDATION-FAIL] Empty response from external API');
+              context.set('message.status.code', 502);
+              context.set('message.body', {
+                error: 'Bad Gateway',
+                message: 'External API returned empty response'
+              });
+              context.message.header.set('Content-Type', 'application/json');
+              throw new Error('Empty external API response');
+            }
+            
+            // 3. 필수 필드 검증
+            var requiredFields = ['order_number', 'status', 'created_at'];
+            for (var i = 0; i < requiredFields.length; i++) {
+              var field = requiredFields[i];
+              if (!orderData[field]) {
+                console.error('[INPUT-VALIDATION-FAIL] Missing required field: ' + field);
+                context.set('message.status.code', 502);
+                context.set('message.body', {
+                  error: 'Bad Gateway',
+                  message: 'External API response missing required field: ' + field
+                });
+                context.message.header.set('Content-Type', 'application/json');
+                throw new Error('Missing required field');
+              }
+            }
+            
+            // 4. 데이터 타입 검증
+            if (typeof orderData.order_number !== 'string') {
+              console.error('[INPUT-VALIDATION-FAIL] Invalid order_number type');
+              context.set('message.status.code', 502);
+              context.set('message.body', {
+                error: 'Bad Gateway',
+                message: 'External API returned invalid data type'
+              });
+              context.message.header.set('Content-Type', 'application/json');
+              throw new Error('Invalid data type');
+            }
+            
+            // 5. 값 범위 검증
+            var validStatuses = ['SHIPPED', 'PICKED', 'PENDING', 'DELIVERED'];
+            if (validStatuses.indexOf(orderData.status) === -1) {
+              console.error('[INPUT-VALIDATION-FAIL] Invalid status value: ' + orderData.status);
+              // 잘못된 값은 기본값으로 대체
+              orderData.status = 'PENDING';
+              console.error('[INPUT-VALIDATION] Status sanitized to: PENDING');
+            }
+            
+            // 6. XSS 방어 - HTML/Script 태그 제거
+            function sanitizeString(str) {
+              if (typeof str !== 'string') return str;
+              return str.replace(/<[^>]*>/g, '')
+                       .replace(/javascript:/gi, '')
+                       .replace(/on\w+=/gi, '');
+            }
+            
+            if (orderData.order_number) {
+              orderData.order_number = sanitizeString(orderData.order_number);
+            }
+            if (orderData.tracking_reference) {
+              orderData.tracking_reference = sanitizeString(orderData.tracking_reference);
+            }
+            
+            // 7. 날짜 형식 검증
+            function isValidDate(dateString) {
+              var date = new Date(dateString);
+              return date instanceof Date && !isNaN(date);
+            }
+            
+            if (orderData.created_at && !isValidDate(orderData.created_at)) {
+              console.error('[INPUT-VALIDATION-FAIL] Invalid created_at date format');
+              orderData.created_at = new Date().toISOString();
+            }
+            
+            if (orderData.shipped_at && !isValidDate(orderData.shipped_at)) {
+              console.error('[INPUT-VALIDATION-WARN] Invalid shipped_at date format');
+              delete orderData.shipped_at;
+            }
+            
+            // 8. 응답 크기 제한
+            var responseSize = JSON.stringify(orderData).length;
+            var MAX_RESPONSE_SIZE = 1048576; // 1MB
+            
+            if (responseSize > MAX_RESPONSE_SIZE) {
+              console.error('[INPUT-VALIDATION-FAIL] Response too large: ' + responseSize);
+              context.set('message.status.code', 502);
+              context.set('message.body', {
+                error: 'Bad Gateway',
+                message: 'External API response exceeds size limit'
+              });
+              context.message.header.set('Content-Type', 'application/json');
+              throw new Error('Response too large');
+            }
+            
+            console.error('[INPUT-VALIDATION-SUCCESS] External API response validated');
+            context.set('order.body', orderData);
+      - map:
+          version: 2.0.0
+          title: map input to lambda
+          inputs:
+            input:
+              schema:
+                type: object
+                properties:
+                  delivery_method:
+                    type: string
+                    name: delivery_method
+                  tracking_reference:
+                    type: string
+                    name: tracking_reference
+              variable: order.body
+          outputs:
+            output:
+              schema:
+                type: object
+                properties:
+                  shipper:
+                    type: string
+                    name: shipper
+                  reference:
+                    type: string
+                    name: reference
+              variable: message.body
+              content: application/json
+          actions:
+            - set: output.shipper
+              from: input.delivery_method
+            - set: output.reference
+              from: input.tracking_reference
+      - invoke:
+          version: 2.2.0
+          title: 'lambda: track shipment'
+          backend-type: detect
+          header-control:
+            type: blocklist
+            values: []
+          parameter-control:
+            type: allowlist
+            values: []
+          http-version: HTTP/1.1
+          timeout: 60
+          verb: POST
+          chunked-uploads: true
+          persistent-connection: true
+          cache-response: protocol
+          cache-ttl: 900
+          stop-on-error: []
+          websocket-upgrade: false
+          target-url: >-
+            https://plgej7e2skungmxzjakprvhe340qkrkl.lambda-url.us-east-1.on.aws/
+          output: tracking
+          graphql-send-type: detect
+          description: >-
+            Call lambda function to look up the tracking for a  parcel with the
+            associated shipping company.
+      # API10: Lambda 응답 검증
+      - gatewayscript:
+          version: 2.0.0
+          title: INPUT-VALIDATION - Validate Lambda Response
+          source: |
+            // API10: Lambda 응답 검증
+            
+            var trackingData = context.get('tracking.body');
+            var statusCode = context.get('tracking.status.code');
+            
+            console.error('[INPUT-VALIDATION] Validating Lambda response');
+            
+            // Lambda 응답 상태 코드 확인
+            if (statusCode !== 200) {
+              console.error('[INPUT-VALIDATION-WARN] Lambda returned non-200: ' + statusCode);
+              // Lambda 실패 시 기본 응답 사용
+              trackingData = {
+                trackResponse: {
+                  shipment: {
+                    package: {
+                      activity: {
+                        status: { description: 'Tracking information unavailable' }
+                      }
+                    }
+                  }
+                }
+              };
+              context.set('tracking.body', trackingData);
+            }
+            
+            // 응답 데이터 구조 검증
+            if (trackingData && trackingData.trackResponse) {
+              // XSS 방어 - 추적 정보 sanitize
+              function sanitizeObject(obj) {
+                if (typeof obj === 'string') {
+                  return obj.replace(/<[^>]*>/g, '')
+                           .replace(/javascript:/gi, '')
+                           .replace(/on\w+=/gi, '');
+                }
+                if (typeof obj === 'object' && obj !== null) {
+                  for (var key in obj) {
+                    obj[key] = sanitizeObject(obj[key]);
+                  }
+                }
+                return obj;
+              }
+              
+              trackingData = sanitizeObject(trackingData);
+              context.set('tracking.body', trackingData);
+            }
+            
+            console.error('[INPUT-VALIDATION-SUCCESS] Lambda response validated');
+      - map:
+          version: 2.0.0
+          title: combine data for response
+          inputs:
+            tracking:
+              schema:
+                type: object
+                properties:
+                  trackResponse:
+                    type: object
+                    name: trackResponse
+                    properties:
+                      shipment:
+                        type: object
+                        name: shipment
+                        properties:
+                          package:
+                            type: object
+                            name: package
+                            properties:
+                              activity:
+                                type: array
+                                name: activity
+                                items:
+                                  type: object
+                                  properties:
+                                    status:
+                                      type: object
+                                      name: status
+              variable: tracking.body
+            order:
+              schema:
+                type: object
+                properties:
+                  order_number:
+                    type: string
+                    name: order_number
+                  created_at:
+                    type: string
+                    name: created_at
+                  shipped_at:
+                    type: string
+                    name: shipped_at
+                  status:
+                    type: string
+                    name: status
+                  tracking_reference:
+                    type: string
+                    name: tracking_reference
+              variable: order.body
+          outputs:
+            output:
+              schema:
+                type: object
+                properties:
+                  order_number:
+                    type: string
+                    name: order_number
+                    maxLength: 50
+                  status:
+                    type: string
+                    name: status
+                    enum:
+                      - SHIPPED
+                      - PICKED
+                      - PENDING
+                      - DELIVERED
+                  shipped_at:
+                    type: string
+                    name: shipped_at
+                    format: date-time
+                    maxLength: 50
+                  tracking_reference:
+                    type: string
+                    name: tracking_reference
+                    maxLength: 100
+                  tracking_status:
+                    type: object
+                    name: tracking_status
+                  created_at:
+                    type: string
+                    name: created_at
+                    format: date-time
+                    maxLength: 50
+              variable: message.body
+          actions:
+            - set: output.order_number
+              from: order.order_number
+            - set: output.tracking_status
+              from: tracking.trackResponse.shipment.package.activity.status
+            - set: output.shipped_at
+              from: order.shipped_at
+            - set: output.tracking_reference
+              from: order.tracking_reference
+            - set: output.status
+              from: order.status
+            - set: output.created_at
+              from: order.created_at
+      # API10: 최종 응답 검증 및 Sanitize
+      - gatewayscript:
+          version: 2.0.0
+          title: INPUT-VALIDATION - Final Response Sanitization
+          source: |
+            // API10: 최종 응답 검증 및 정제
+            
+            var response = context.get('message.body');
+            
+            console.error('[INPUT-VALIDATION] Final response sanitization');
+            
+            // 모든 문자열 필드 sanitize
+            function deepSanitize(obj) {
+              if (typeof obj === 'string') {
+                return obj.replace(/<[^>]*>/g, '')
+                         .replace(/javascript:/gi, '')
+                         .replace(/on\w+=/gi, '')
+                         .substring(0, 1000); // 최대 길이 제한
+              }
+              if (Array.isArray(obj)) {
+                return obj.map(deepSanitize);
+              }
+              if (typeof obj === 'object' && obj !== null) {
+                var sanitized = {};
+                for (var key in obj) {
+                  sanitized[key] = deepSanitize(obj[key]);
+                }
+                return sanitized;
+              }
+              return obj;
+            }
+            
+            response = deepSanitize(response);
+            
+            // 보안 헤더 추가
+            context.message.header.set('X-Content-Type-Options', 'nosniff');
+            context.message.header.set('X-Frame-Options', 'DENY');
+            context.message.header.set('Content-Security-Policy', "default-src 'none'");
+            
+            context.set('message.body', response);
+            
+            console.error('[INPUT-VALIDATION-SUCCESS] Final response sanitized');
+    catch:
+      - errors:
+          - ConnectionError
+          - RuntimeError
+        execute:
+          - gatewayscript:
+              version: 2.0.0
+              title: Handle Validation Errors
+              source: |
+                // 검증 에러 처리
+                var errorMessage = context.get('error.message') || 'Validation failed';
+                
+                console.error('[INPUT-VALIDATION-ERROR] ' + errorMessage);
+                
+                context.set('message.status.code', 502);
+                context.set('message.body', {
+                  error: 'Bad Gateway',
+                  message: 'External API validation failed'
+                });
+                context.message.header.set('Content-Type', 'application/json');
+    finally: []
+  activity-log:
+    enabled: true
+    success-content: activity
+    error-content: payload
+x-original-swagger-version: '2.0'
+
+# Made with Bob
